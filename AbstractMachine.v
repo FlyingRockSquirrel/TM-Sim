@@ -570,7 +570,95 @@ Fixpoint reduce_configuration_cbn_multistep n C :=
     end
   end. 
 
-Inductive HReduceTerm v_size : (HTerm * Heap) -> (HTerm * Heap) -> Prop :=
+Fixpoint cbn_contextless_step t Hp v_size :=
+  match t with
+  | HApp (HAbs n t1) t2 => 
+      if parameterized_size_hterm t2 v_size <=? Nat.log2_up (card_dom_heap Hp) 
+    then 
+      Some (subst t2 n t1, Hp, v_size)
+    else 
+      Some (subst (HAddr (nxt Hp)) n t1, insert_heap Hp t2, v_size)
+  | HApp t1 t2 => 
+    match (cbn_contextless_step t1 Hp v_size) with
+    | Some (t1', Hp', v_size) => Some (HApp t1' t2, Hp', v_size)
+    | None => None
+    end
+  | HAddr n => 
+    match lookup_heap Hp n with
+    | Some t' => Some (t', Hp, v_size)
+    | None => None
+    end
+  | _ => None
+  end. 
+
+Lemma contextless_step_red_config_equiv :
+  forall t Hp v_size, 
+    cbn_contextless_step t Hp v_size = reduce_configuration_cbn (t, Hp, v_size).
+Proof. 
+  induction t; intros.
+  - simpl; reflexivity.
+  - destruct (reduce_configuration_cbn (t1, Hp, v_size)) eqn:redc;[simpl|].
+    + specialize (IHt1 Hp v_size). 
+      rewrite redc in IHt1.
+      destruct c.
+      destruct p.   
+      rewrite IHt1.
+      destruct t1; try discriminate; [|simpl; simpl in IHt1; destruct (lookup_heap Hp n0); try discriminate; try congruence].
+      simpl in redc.
+      simpl.     
+      destruct (match t1_1 with
+        | HAbs n t1 => Some (HCHole, HApp (HAbs n t1) t1_2)
+        | _ =>
+        match cbn_context t1_1 with
+        | Some (C, t) => Some (AbsHCon C t1_2, t)
+        | None => None
+        end
+        end) eqn:t1mtch; try discriminate.
+      destruct p. 
+      destruct (reduce_term h1 v_size Hp) eqn:redt; try discriminate.
+      destruct p. inversion redc; subst. simpl. reflexivity.
+    + unfold reduce_configuration_cbn in redc.
+      unfold reduce_configuration_cbn. simpl. 
+      destruct (cbn_context t1) eqn:ctxt1.
+      * destruct p.  
+        destruct (reduce_term h v_size Hp) eqn:redt; try congruence;
+        [destruct p; try discriminate|].
+        destruct t1; try discriminate;
+        rewrite redt;[ |simpl in *; inversion ctxt1; subst; simpl in redt; destruct (lookup_heap Hp n); try congruence; reflexivity].
+        rewrite IHt1. simpl.
+        simpl in ctxt1.
+        rewrite ctxt1. rewrite redt. reflexivity.
+      * destruct t1; simpl in ctxt1; try discriminate; try (simpl; reflexivity); [| simpl; destruct (parameterized_size_hterm t2 v_size <=? Nat.log2_up (card_dom_heap Hp)); try reflexivity].
+        rewrite IHt1. simpl. rewrite ctxt1. reflexivity.
+  - simpl. reflexivity.
+  - simpl. destruct (lookup_heap Hp n); reflexivity.
+Qed.  
+
+Fixpoint multistep_cbn_configuration_contextless n C : option configuration :=
+  match n with
+  | 0 => Some C
+  | S n' => 
+    match C with
+    | (t, Hp, v_size) => 
+      match cbn_contextless_step t Hp v_size with
+      | Some C' => multistep_cbn_configuration_contextless n' C'
+      | None => None
+      end
+    end
+  end. 
+
+Lemma multistep_cbn_equiv : 
+  forall n C, 
+    multistep_cbn_configuration_contextless n C = reduce_configuration_cbn_multistep n C.
+Proof.
+  induction n; intros; simpl; try reflexivity.
+  destruct C. destruct p. rewrite contextless_step_red_config_equiv.
+  destruct (reduce_configuration_cbn (h, h0, n0)); try reflexivity.
+  eapply IHn.
+Qed.   
+
+
+(* Inductive HReduceTerm v_size : (HTerm * Heap) -> (HTerm * Heap) -> Prop :=
   | HFullBeta : 
     forall n t1 t2 Hp, 
       parameterized_size_hterm t2 v_size <=? Nat.log2_up (card_dom_heap Hp) ->
@@ -582,7 +670,7 @@ Inductive HReduceTerm v_size : (HTerm * Heap) -> (HTerm * Heap) -> Prop :=
   | HLookup : 
     forall n Hp t,
       lookup_heap Hp n = Some t ->
-      HReduceTerm v_size (HAddr n, Hp) (t, Hp). 
+      HReduceTerm v_size (HAddr n, Hp) (t, Hp).  *)
 
 
 (* Inductive HConfigurationStep : configuration -> configuration -> Prop :=
@@ -644,7 +732,7 @@ Definition heap_dag (Hp : Heap) : Prop :=
   lookup_heap Hp n = Some t ->
   forall n',
   (elem_of n' (addrs t)) ->
-  n' <= n. 
+  n' < n. 
 
 Definition heap_missless (Hp : Heap) : Prop :=
   forall n t,
@@ -664,6 +752,39 @@ Definition valid_config (config : configuration) : Prop :=
   heap_dag (Hp) /\
   heap_missless (Hp) /\
   term_valid_heap t Hp.
+
+
+(* subterm t1 t2 = t1 is a subterm of t2 *)
+Inductive Subterm : HTerm -> HTerm -> Prop :=
+| HAppSTL :
+  forall t1 t2 t_sub, 
+    Subterm t_sub t1 ->
+    Subterm t_sub (HApp t1 t2)
+| HAppSTR : 
+  forall t1 t2 t_sub, 
+    Subterm t_sub t2 ->
+    Subterm t_sub (HApp t1 t2)
+| HAbsST : 
+  forall n t t_sub, 
+    Subterm t_sub t ->
+    Subterm t_sub (HAbs n t)
+| HReflST : 
+  forall t, 
+    Subterm t t. 
+
+      (* | HCHole : EHContext (* hole *)
+  | AbsHCon : EHContext -> HTerm -> EHContext (* hole in caller *)
+  | ArgHCon : HTerm -> EHContext -> EHContext (* hole in arg *)
+  | LamHCon : nat -> EHContext -> EHContext. hole lambda body *)
+
+Fixpoint addrs_context C' :=
+  match C' with 
+  | HCHole => ∅
+  | AbsHCon C t => union (addrs_context C) (addrs t)
+  | ArgHCon t C => union (addrs t) (addrs_context C)
+  | LamHCon n C => addrs_context C
+  end. 
+
 
 Lemma subst_addr_subset : 
   forall t1 n t2, 
@@ -743,42 +864,390 @@ Proof.
     rewrite elem_of_dom. unfold is_Some. rewrite H4. exists x. reflexivity.
 Qed. 
 
+Lemma cbn_context_subterm : 
+  forall t C t', 
+    cbn_context t = Some (C, t') ->
+    Subterm t' t. 
+Proof. 
+  induction t; intros. 
+  - simpl in H0. discriminate.
+  - simpl in H0. 
+    destruct (cbn_context t1) eqn:t1eq.
+    * destruct p. destruct t1; try discriminate. 
+      -- inversion H0; subst. specialize (IHt1 _ _ eq_refl).
+        eapply HAppSTL. eassumption.
+      -- simpl in t1eq. inversion t1eq; subst. 
+        inversion H0; subst.   
+        eapply HAppSTL. econstructor.
+    * destruct t1; try discriminate.
+      inversion H0; subst.
+      eapply HReflST.
+  - simpl in *. discriminate.
+  - simpl in *. inversion H0; subst.
+    apply HReflST.
+Qed.
 
-(* Lemma trace_valid_config : 
+Lemma subterm_dom_subset : 
+  forall t t', 
+    Subterm t' t ->
+    subseteq (addrs t') (addrs t). 
+Proof. 
+  induction t; intros. 
+  - inversion H0; subst. 
+    simpl in *.  set_solver. 
+  - inversion H0; subst. 
+    + simpl.  specialize (IHt1 _ H3).
+      set_solver. 
+    + simpl in *. specialize (IHt2 _ H3).
+      set_solver. 
+    + set_solver. 
+  - simpl in *. inversion H0; subst; simpl;[ eapply IHt; try eassumption|].
+    set_solver. 
+  - inversion H0; subst. set_solver. 
+Qed. 
+
+Lemma cbn_con_select_addr_subset : 
+  forall t C t', 
+  cbn_context t = Some (C, t') ->
+  subseteq (addrs_context C) (addrs t). 
+Proof. 
+  induction t; intros. 
+  - simpl in H0.  discriminate. 
+  - simpl in H0. simpl. 
+    destruct (cbn_context t1) eqn:t1eq; [destruct p|]. 
+    + specialize (IHt1 _ _ eq_refl). 
+      destruct t1; inversion H0; subst.
+      * simpl in *; try discriminate. 
+      * simpl. simpl in IHt1. set_solver.
+      * simpl. set_solver.
+      * simpl. simpl in IHt1. set_solver.
+    + destruct t1; try discriminate.
+      inversion H0. subst. simpl. set_solver.
+  - simpl in H0. discriminate.
+  - simpl in *. inversion H0; subst. simpl. set_solver.
+Qed.        
+
+Lemma subset_term_valid_heap :
+  forall t t' Hp,
+  subseteq (addrs t) (addrs t') ->
+  term_valid_heap t' Hp ->
+  term_valid_heap t Hp. 
+Proof. 
+  intros. unfold term_valid_heap in *. intros. eapply H1; try eassumption.
+  set_solver.
+Qed.    
+
+Lemma subterm_term_valid_heap : 
+  forall t t' Hp, 
+    Subterm t' t ->
+    term_valid_heap t Hp ->
+    term_valid_heap t' Hp. 
+Proof. 
+  intros. 
+  unfold term_valid_heap in *; intros. 
+  pose proof subterm_dom_subset t t' H0.
+  specialize (H1 n).
+  set_solver. 
+Qed.
+
+Lemma elem_dom_heap_wf : 
+  forall Hp n, 
+    n ∈ dom_heap Hp ->
+    n < nxt Hp. 
+Proof. 
+  intros. unfold dom_heap in H0. destruct Hp. simpl in *.
+  pose proof (unsquash (wf_dec _ _ ) wf0). 
+  pose proof elem_of_dom H1 n.
+  destruct H3; clear H4.
+  specialize (H3 H0). unfold is_Some in H3.
+  destruct (Nat.le_dec nxt0 n ).
+  + specialize (H2 n l).
+    destruct H3. congruence.
+  + lia.
+Qed.     
+
+Lemma config_valid_reduce : 
+  forall t Hp v_size t' Hp',
+  valid_config (t, Hp, v_size) ->
+  reduce_term t v_size Hp = Some (t', Hp') ->
+  valid_config (t', Hp', v_size).
+Proof.
+  destruct t.
+  - intros. simpl in H1. discriminate.
+  - intros. simpl in H1. destruct t1; try discriminate.
+    destruct (parameterized_size_hterm t2 v_size <=? Nat.log2_up(card_dom_heap Hp)) eqn:psize.
+    + inversion H1; subst.
+      unfold valid_config in *. split; try split.
+      * tauto. 
+      * tauto.
+      * destruct H0 as (dag, (full, vld)). 
+        eapply (term_valid_heap_reduce _ _ v_size); [ apply full | apply vld | ].
+        simpl. rewrite psize.  reflexivity.
+    + destruct H0 as (dag, (full, vld)).  inversion H1; subst.
+      unfold valid_config in *. split; try split.
+      * unfold heap_dag. unfold term_valid_heap in vld.
+        intros. unfold insert_heap in H0. unfold lookup_heap in H0.
+        destruct Hp. simpl in H0. simpl in *. unfold insert_heap in H1.
+        simpl in H1.
+        destruct (PeanoNat.Nat.eq_dec n0 nxt0).
+        -- subst. rewrite lookup_insert_eq in H0.
+          inversion H0; subst. 
+          specialize (vld n' ltac:(set_solver)). 
+          pose proof elem_dom_heap_wf _ _ vld.
+          simpl in H4. assumption.
+        -- rewrite lookup_insert_ne in H0; try congruence.
+          eapply dag; try eassumption.
+      * unfold heap_missless. intros.
+        unfold insert_heap in H0. unfold lookup_heap in H0.
+        destruct Hp. simpl in H0.
+        destruct (PeanoNat.Nat.eq_dec n0 nxt0).
+        -- subst. rewrite lookup_insert_eq in H0.
+          inversion H0; subst.
+          unfold term_valid_heap in vld. 
+          simpl in vld.
+          specialize (vld n' ltac:(set_solver)).
+          unfold dom_heap in vld. simpl in vld.
+          destruct (elem_of_dom H3 n') as (edom, _).
+          specialize (edom vld).
+          unfold is_Some in edom.
+          destruct edom.
+          exists x.
+          unfold lookup_heap. unfold insert_heap. simpl.
+          rewrite lookup_insert_ne; try done.    
+          pose proof elem_dom_heap_wf {| H := H3; nxt := nxt0; wf := wf0 |} n'.
+          simpl in H5. unfold dom_heap in H5. simpl in H5.
+          specialize (H5 vld).
+          lia.
+        -- rewrite lookup_insert_ne in H0; try congruence.
+          unfold heap_missless in full.
+          specialize (full n0 t ltac:(unfold lookup_heap; simpl; eapply H0) n' H2).
+          destruct full. exists x.
+          unfold lookup_heap in *. unfold insert_heap. simpl.  simpl in H4. 
+          rewrite lookup_insert_ne; try eassumption.
+          pose proof elem_dom_heap_wf {| H := H3; nxt := nxt0; wf := wf0 |} n'.
+          simpl in H5. unfold dom_heap in H5. simpl in H5.
+          destruct (elem_of_dom H3 n') as (_, edom).
+          specialize (edom ltac:(exists x; eapply H4)).
+          specialize (H5 edom). lia.
+      *  eapply (term_valid_heap_reduce _ _ v_size); [ apply full | apply vld | ].
+        simpl. rewrite psize.       reflexivity.
+  - intros. simpl in H0. discriminate.
+  - intros. simpl in H1.    
+    destruct (lookup_heap Hp n) eqn:lkn; try discriminate.
+    inversion H1; subst.    
+    unfold valid_config in *.
+    destruct H0 as (dag, (full, vld)).
+    split; try split; try done.
+    unfold term_valid_heap. intros.
+    unfold heap_missless in full.
+    specialize (full n t' lkn n0 H0).
+    destruct full.
+    unfold dom_heap. destruct Hp'; simpl in *.
+    unfold lookup_heap in H2. simpl in H2.
+    eapply (elem_of_dom H3 n0). exists x. apply H2.
+Qed.            
+
+Lemma insert_heap_mono : 
+  forall n Hp t t',
+    lookup_heap Hp n = Some t ->
+    lookup_heap (insert_heap Hp t') n = Some t.
+Proof.
+  intros.
+  destruct Hp; simpl. unfold lookup_heap in *. simpl in *.
+  pose proof unsquash (wf_dec _ _) wf0.
+  rewrite lookup_insert_ne; try eassumption.
+  unfold not. intros.
+  specialize (H2 n ltac:(lia)).
+  congruence.
+Qed.           
+
+Lemma cbn_contextless_step_heap_expand :
+  forall t t' Hp Hp' v_size, 
+    cbn_contextless_step t Hp v_size = Some (t', Hp', v_size) ->
+    (forall n t, 
+      lookup_heap Hp n = Some t ->
+      lookup_heap Hp' n = Some t).
+Proof.
+  induction t; intros.
+  - simpl in H0; try discriminate.
+  - simpl in H0. destruct t1.
+    + simpl in H0. discriminate.
+    + destruct (cbn_contextless_step (HApp t1_1 t1_2) Hp v_size) eqn:cstepapp; try discriminate.
+      destruct p. destruct p.
+      inversion H0; subst. 
+      eapply IHt1; try eassumption.
+    + destruct (parameterized_size_hterm t2 v_size <=? Nat.log2_up(card_dom_heap Hp));inversion H0; subst; [eassumption|].
+      inversion H0; subst. 
+      eapply insert_heap_mono. assumption.
+    + simpl in H0.   
+      destruct (lookup_heap Hp n0); try discriminate.
+      inversion H0; subst.
+      assumption.
+  - simpl in H0. discriminate.
+  - simpl in H0. destruct (lookup_heap Hp n); try discriminate.
+    inversion H0; subst. assumption.
+Qed.   
+
+Lemma trace_valid_config_step : 
+forall t t' Hp Hp' v_size, 
+  valid_config (t, Hp, v_size) ->
+  cbn_contextless_step t Hp v_size = Some (t', Hp', v_size) ->
+  valid_config (t', Hp', v_size). 
+Proof.
+  induction t.
+  - intros. simpl in *. try discriminate.
+  - intros. simpl in H1. 
+    destruct t1; try discriminate.
+    + destruct (cbn_contextless_step (HApp t1_1 t1_2) Hp v_size) eqn:cstep; try discriminate.
+      destruct p. destruct p.
+      inversion H1; subst.    
+      destruct H0 as (dag, (full, vld)).
+      pose proof (subterm_term_valid_heap (HApp (HApp t1_1 t1_2) t2) (HApp t1_1 t1_2) Hp ltac:(eapply HAppSTL; eapply HReflST) vld) as vldt1.
+      specialize (IHt1 _ _ _ _ ltac:(split; try split; try (apply dag); try (apply full); try (apply vldt1)) cstep).
+      destruct IHt1 as (dag1, (full1, vld1)).
+      split; try split; try assumption. 
+      pose proof cbn_contextless_step_heap_expand _ _ _ _ _ cstep.
+      unfold term_valid_heap. intros. simpl in H2. 
+      specialize (H0 n).
+      rewrite elem_of_union in H2.
+      destruct H2.
+      * eapply (vld1 n H2).
+      * specialize (vld n ltac:(simpl; set_solver)).
+        destruct Hp. destruct Hp'.
+        unfold dom_heap in *. simpl in *; clear cstep.
+        eapply elem_of_dom.     
+        pose proof elem_of_dom H3 n.
+        destruct H5.
+        clear H6.
+        specialize (H5 vld).
+        destruct H5. exists x. unfold lookup_heap in H0. simpl in H0.
+        eapply H0; eassumption.
+    + destruct (parameterized_size_hterm t2 v_size <=? Nat.log2_up (card_dom_heap Hp)). 
+      * inversion H1; subst.
+        destruct H0 as (dag, (full, vld)).
+        split; try split; try assumption.
+        unfold term_valid_heap in *. intros.
+        eapply vld. eapply subst_addr_subset. assumption.
+      * inversion H1; subst. split; try split.
+        {
+          destruct H0 as (dag, (full, vld)).
+          unfold heap_dag; intros.
+          pose proof subterm_term_valid_heap (HApp (HAbs n t1) t2) t2 Hp ltac:(eapply HAppSTR; eapply HReflST) vld.
+          destruct Hp. unfold insert_heap in H0. unfold lookup_heap in H0. simpl in H0.
+          destruct (PeanoNat.Nat.eq_dec n0 nxt0).
+          - subst. rewrite lookup_insert_eq in H0.
+            inversion H0; subst.
+            specialize (H3 n' H2).
+            unfold dom_heap in H3. simpl in H3.
+            pose proof unsquash (wf_dec _ _) wf0 n'.
+            destruct (Nat.le_dec nxt0 n').
+            + specialize (H5 l).
+              eapply elem_of_dom in H3.
+              destruct H3. congruence.
+            + lia.
+          - rewrite lookup_insert_ne in H0; try congruence.
+            eapply dag; eassumption.   
+        }
+        {
+          destruct H0 as (dag, (full, vld)).
+          unfold heap_missless; intros.
+          unfold lookup_heap in *; unfold insert_heap in *.
+          destruct Hp; simpl in *.
+          destruct (PeanoNat.Nat.eq_dec n0 nxt0).
+          - subst. rewrite lookup_insert_eq in H0.
+            inversion H0; subst. 
+            specialize (vld n' ltac:(simpl; set_solver)).
+            unfold dom_heap in vld. simpl in vld.
+            eapply elem_of_dom in vld. 
+            destruct vld.
+            destruct (PeanoNat.Nat.eq_dec nxt0 n').
+            + exists t. subst. rewrite lookup_insert_eq. reflexivity.
+            + exists x. rewrite lookup_insert_ne; try congruence.
+          - rewrite lookup_insert_ne in H0; try congruence.
+            pose proof full n0 t.
+            unfold lookup_heap in H4. simpl in H4.
+            specialize (H4 H0 n' H2).
+            destruct H4.
+            destruct (PeanoNat.Nat.eq_dec nxt0 n').
+            + subst. exists t2. rewrite lookup_insert_eq. reflexivity.
+            + exists x. rewrite lookup_insert_ne; try congruence.    
+        }
+        unfold term_valid_heap in *. intros.
+        pose proof subst_addr_subset _ _ _ _ H2.
+        simpl in H3.
+        unfold dom_heap. unfold insert_heap. simpl.
+        destruct Hp; simpl in *. clear H1.
+        rewrite elem_of_union in H3. 
+        (* destruct H3. *)
+        rewrite elem_of_dom. unfold is_Some. rewrite lookup_insert.
+        destruct (decide (nxt0 = n0)).
+        -- exists t2; reflexivity.
+        -- destruct H3;
+          [| rewrite elem_of_union in H1; destruct H1; [rewrite elem_of_singleton in H1; congruence|rewrite elem_of_empty in H1; contradiction]].
+          destruct (H0) as (?, (?, vldt2)). 
+          specialize (vldt2 n0 ltac:(eapply elem_of_union; left; eapply H1)).
+          unfold dom_heap in vldt2. simpl in vldt2. rewrite elem_of_dom in vldt2.
+          eapply vldt2.
+    + simpl in H1. destruct (lookup_heap Hp n) eqn:lkupn; try discriminate.
+      inversion H1; subst.
+      destruct H0 as (dag, (full, vld)).
+      split; try split; try eassumption. 
+      unfold term_valid_heap; intros. simpl in H0. 
+      destruct Hp'. unfold dom_heap. simpl. 
+      unfold lookup_heap in lkupn.
+      simpl in lkupn.  
+      specialize (full n h ltac:(unfold lookup_heap; simpl; apply lkupn) n0).
+      rewrite elem_of_union in H0.
+      destruct H0.
+      * specialize (full H0).
+        unfold lookup_heap in full. simpl in full.
+        eapply elem_of_dom. eapply full.
+      * specialize (vld n0 ltac:(simpl; set_solver)).
+        unfold dom_heap in vld. simpl in vld .
+        assumption.
+  - intros. simpl in *. try discriminate.
+  - intros. simpl in *.
+    destruct H0 as (dag, (full, vld)).
+    destruct (lookup_heap Hp n) eqn:lkupn; inversion H1; subst; split; try split; try assumption; try discriminate.
+    unfold term_valid_heap; intros.
+    pose proof (full n t' lkupn n0 H0).
+    eapply elem_of_dom. eapply H2.
+Qed. 
+
+Lemma cbn_contextless_step_same_v_size : 
+  forall t t' Hp Hp' vsize vsize', 
+    cbn_contextless_step t Hp vsize = Some (t', Hp', vsize') ->
+    vsize = vsize'.
+Proof.
+  induction t; intros.
+  - simpl in H0. discriminate.
+  - simpl in *. destruct t1. 
+    + simpl in H0. discriminate.
+    + destruct (cbn_contextless_step (HApp t1_1 t1_2) Hp vsize) eqn:thing; try discriminate.
+      destruct p. destruct p. inversion H0; subst.
+      eapply IHt1. eapply thing.
+    + destruct (parameterized_size_hterm t2 vsize <=? Nat.log2_up (card_dom_heap Hp)); inversion H0; subst; congruence. 
+    + simpl in H0. destruct (lookup_heap Hp n); try discriminate; congruence.
+  - simpl in H0; discriminate. 
+  - simpl in H0. destruct (lookup_heap Hp n); congruence. 
+Qed. 
+
+       
+
+Lemma trace_valid_config : 
   forall n t t' Hp Hp' v_size, 
     valid_config (t, Hp, v_size) ->
-    reduce_configuration_cbn_multistep n (t, Hp, v_size) = Some (t', Hp', v_size) ->
+    multistep_cbn_configuration_contextless n (t, Hp, v_size) = Some (t', Hp', v_size) ->
     valid_config (t', Hp', v_size). 
 Proof. 
   induction n; intros. 
   - simpl in H1. inversion H1; subst. assumption.
   - simpl in H1. 
-    destruct (cbn_context t) eqn:cbnteq; try discriminate.
-    destruct p. 
-    destruct (reduce_term h v_size Hp) eqn:redteq; try discriminate. 
-    destruct p.
-    destruct h; destruct t; simpl in cbnteq; try discriminate. 
-    + destruct t1; try discriminate; [|simpl in cbnteq; try congruence]. 
-      destruct (cbn_context (HApp t1_1 t1_2)); try discriminate. 
-      destruct p.  inversion cbnteq; subst.  
-      admit.
-    + admit.
-    +      
-    destruct t; destruct e; simpl in cbnteq; try discriminate. 
-    + simpl in cbnteq; discriminate.
-    +  *)
-
-
-(* Lemma trace_heap_dac : 
-  forall n t t' H v_size, 
-    reduce_configuration_cbn_multistep n (t, empty_heap, v_size) = Some (t', H, v_size) ->
-    heap_dag H.
-Proof. 
-  induction n.
-  - intros. simpl in H1. inversion H1; subst.
-    unfold heap_dag. intros. rewrite empty_heap_lookup in H0. discriminate.  
-  - intros. unfold heap_dag. intros.
-    simpl in H1. 
-    destruct (cbn_context t) eqn:cbnteq; try discriminate. 
-    destruct p.        *)
+    destruct (cbn_contextless_step t Hp v_size) eqn:stepeq; try discriminate.
+    destruct p. destruct p.
+    pose proof (cbn_contextless_step_same_v_size _ _ _ _ _ _ stepeq).
+    subst.  
+    pose proof trace_valid_config_step _ _ _ _ _ H0 stepeq.
+    eapply IHn; [apply H2|apply H1].
+Qed.    
 
