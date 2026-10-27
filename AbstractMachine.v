@@ -35,12 +35,13 @@ match body with
     else Abs n (t_subst substin substout t)
 end. 
 
-Fixpoint unfold substin n body :=
+Fixpoint HTunfold substin n body :=
 match body with
 | HVar i => HVar i
-| HApp t u => HApp (unfold substin n t) (unfold substin n u)
-| HAbs n t => unfold substin n t
-| HAddr n => substin
+| HApp t u => HApp (HTunfold substin n t) (HTunfold substin n u)
+| HAbs n' t => HTunfold substin n t
+| HAddr n' => 
+  if Nat.eqb n n' then substin else HAddr n'
 end. 
 
 Fixpoint term_to_hterm (t : Term) : HTerm :=
@@ -950,6 +951,20 @@ Proof.
   set_solver. 
 Qed.
 
+Lemma app_valid_heap : 
+  forall t t' Hp, 
+    term_valid_heap t Hp ->
+    term_valid_heap t' Hp ->
+    term_valid_heap (HApp t t') Hp.
+Proof. 
+  intros. unfold term_valid_heap in *; intros.
+  simpl in *. eapply elem_of_union in H2. destruct H2. 
+  + unfold dom_heap in *; destruct Hp; simpl in *. 
+    eapply H0; eassumption. 
+  + unfold dom_heap in *; destruct Hp; simpl in *. 
+    eapply H1; eassumption.
+Qed.  
+
 Lemma elem_dom_heap_wf : 
   forall Hp n, 
     n ∈ dom_heap Hp ->
@@ -1232,8 +1247,6 @@ Proof.
   - simpl in H0. destruct (lookup_heap Hp n); congruence. 
 Qed. 
 
-       
-
 Lemma trace_valid_config : 
   forall n t t' Hp Hp' v_size, 
     valid_config (t, Hp, v_size) ->
@@ -1251,3 +1264,175 @@ Proof.
     eapply IHn; [apply H2|apply H1].
 Qed.    
 
+
+Lemma HTunfold_not_in :
+  forall t substin Hp v_size n, 
+    valid_config (t, Hp, v_size) ->
+    lookup_heap Hp n = Some substin ->
+    not (elem_of n (addrs (HTunfold substin n t))).
+Proof. 
+  induction t; intros.
+  - simpl in *. set_solver.
+  - simpl in *. unfold not. intros.
+    eapply elem_of_union in H2. destruct H2.
+    + eapply IHt1; try eassumption; try tauto.  
+      destruct H0 as (dag, (full, vld)).
+      split; try split; try tauto.
+      eapply subterm_term_valid_heap; [|eapply vld].
+      econstructor. econstructor.
+    + eapply IHt2; try eassumption; try tauto.  
+      destruct H0 as (dag, (full, vld)).
+      split; try split; try tauto.
+      eapply subterm_term_valid_heap; [|eapply vld].
+      econstructor; econstructor. 
+  - simpl in *. unfold not. intros. eapply IHt; try eassumption.
+  - simpl in *. unfold not. intros.
+    destruct (Nat.eqb n0 n) eqn:neq. 
+    + eapply Nat.eqb_eq in neq. subst.
+      destruct H0 as (dag, (full, vld)).
+      unfold heap_dag in dag.
+      specialize (dag n substin H1 n H2).
+      lia.   
+    + simpl in H2. eapply Nat.eqb_neq in neq. set_solver.
+Qed.
+
+Lemma HTunfold_upper_bound : 
+  forall t substin Hp v_size n, 
+    valid_config (t, Hp, v_size) ->
+    lookup_heap Hp n = Some substin ->
+    (forall n', 
+      n < n' -> not (elem_of n' (addrs t))) ->
+    forall n', 
+      n <= n' -> not (elem_of n' (addrs (HTunfold substin n t))).
+Proof. 
+  induction t; intros; destruct H0 as (dag, (full, vld)).
+  - simpl in *; set_solver.
+  - simpl in *; unfold not. intros. eapply elem_of_union in H0. destruct H0.
+    + eapply IHt1; try eapply H1; try tauto; try eapply H0; try lia.
+      {
+       split; try split; try tauto.
+       eapply subterm_term_valid_heap; [|eapply vld]. repeat econstructor. 
+      }
+      intros. unfold not. intros. specialize (H2 n'0 H4).
+      eapply H2. set_solver.
+    + eapply IHt2; try eapply H1; try tauto; try eapply H0; try lia.
+      {
+       split; try split; try tauto.
+       eapply subterm_term_valid_heap; [|eapply vld]. 
+       eapply HAppSTR. econstructor. 
+      }
+      intros. unfold not. intros. specialize (H2 n'0 H4).
+      eapply H2. set_solver.
+  - simpl in *; eapply IHt; try eapply H1; try tauto; try eapply H0; try lia.
+  - unfold not. intros; simpl in *. destruct (Nat.eqb n0 n) eqn:neq.
+    + eapply Nat.eqb_eq in neq; subst. 
+      specialize (dag n substin H1 n' H0).
+      lia.
+    + eapply Nat.eqb_neq in neq. 
+      specialize (H2 n').
+      unfold not in H2. eapply H2.
+      * simpl in H0. eapply elem_of_union in H0. destruct H0; [|set_solver].
+        rewrite elem_of_singleton in H0. subst. lia.
+      * simpl in H0. set_solver.
+Qed. 
+
+Lemma HTunfold_preserves_valid_config : 
+  forall t substin Hp v_size n,
+    valid_config (t, Hp, v_size) ->
+    lookup_heap Hp n = Some substin ->
+    valid_config ((HTunfold substin n t), Hp, v_size). 
+Proof.
+  induction t; intros; destruct H0 as (dag, (full, vld)).
+  - simpl in *. split; try split; try tauto.
+  - split; try split; try tauto. simpl.       
+    eapply app_valid_heap. 
+    + eapply IHt1; try eassumption.
+      split; try split; try eassumption.
+      eapply subterm_term_valid_heap; [|eapply vld].
+      repeat econstructor.
+    + eapply IHt2; try eassumption.
+      split; try split; try eassumption.
+      eapply subterm_term_valid_heap; [|eapply vld].
+      eapply HAppSTR; econstructor. 
+  - simpl in *. split; try split; try tauto.
+    unfold term_valid_heap. intros.
+    specialize (IHt substin Hp n0 n0 ltac:(tauto) H1).
+    destruct IHt as (?, (?, vld1)).
+    eapply vld1. eassumption.
+  - simpl in *. split; try split; try tauto.
+    destruct (n0 =? n) eqn:neq.
+    + rewrite Nat.eqb_eq in neq. subst.
+      unfold term_valid_heap; intros.
+      specialize (full n substin H1 n0 H0).
+      destruct full. unfold dom_heap; destruct Hp; simpl in *.
+      eapply elem_of_dom; exists x.
+      unfold lookup_heap in H2. simpl in H2. eassumption.
+    + assumption.
+  Unshelve. 
+  all: apply 0. 
+Qed. 
+
+Fixpoint HT_unfold_abstract n Hp t :=
+  match n with
+  | 0 => 
+    match lookup_heap Hp 0 with
+    | Some t' => HTunfold t' 0 t
+    | None => t
+    end
+  | S n' => 
+    match lookup_heap Hp (S n') with
+    | Some t' => HT_unfold_abstract n' Hp (HTunfold t' (S n') t)
+    | None => HT_unfold_abstract n' Hp t
+    end
+  end. 
+
+Definition HT_unfold_concrete Hp t :=
+  HT_unfold_abstract (nxt Hp) Hp t. 
+
+Lemma HT_unfold_abstract_at_n :
+  forall n Hp t v_size, 
+    valid_config (t, Hp, v_size) ->
+    (forall n', 
+      n < n' -> not (elem_of n' (addrs t))) ->
+    forall n', 
+      n <= n' ->
+    not (elem_of n' (addrs (HT_unfold_abstract n Hp t))).
+Proof.
+  induction n; intros; destruct H0 as (dag, (full, vld)).
+  - unfold not. intros. simpl in H0.
+    destruct (lookup_heap Hp 0) eqn:lkupeq; simpl in H0.
+    + eapply HTunfold_upper_bound; try eassumption; try split; try split; try eassumption. 
+    + eapply H1; [|eassumption].
+      eapply Nat.lt_eq_cases in H2.
+      destruct H2; try lia. subst. exfalso. 
+      specialize (vld 0 H0).     
+      destruct Hp; unfold dom_heap in vld; simpl in vld.
+      eapply elem_of_dom in vld.
+      destruct vld; unfold lookup_heap in lkupeq; simpl in lkupeq.
+      congruence.
+  - unfold not. intros.
+    simpl in H0.
+    destruct (lookup_heap Hp (S n)) eqn:lkuphp.
+    + specialize (IHn Hp (HTunfold h (S n) t) v_size).
+      eapply IHn; [ | | | eapply H0]; try lia.
+      2:{
+        intros. eapply HTunfold_upper_bound; try eassumption.
+        split; try split; tauto.    
+      }
+      eapply HTunfold_preserves_valid_config; try eassumption.
+      split; try split; eassumption.   
+    + eapply IHn; try eassumption; try lia.
+      * split; try split; eassumption.
+      * intros. unfold not. intros. 
+        assert (S n <= n'0) as ineq by lia.  
+        eapply Nat.lt_eq_cases in ineq.
+        eapply H1; try eassumption.  
+        destruct ineq; try lia. subst. exfalso. 
+        specialize (vld (S n) H4).     
+        destruct Hp; unfold dom_heap in vld; simpl in vld.
+        eapply elem_of_dom in vld.
+        destruct vld; unfold lookup_heap in lkuphp; simpl in lkuphp.
+        congruence.
+    Unshelve. 
+    all:apply 0.
+Qed. 
