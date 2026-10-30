@@ -1436,3 +1436,61 @@ Proof.
     Unshelve. 
     all:apply 0.
 Qed. 
+
+Lemma HT_unfold_abstract_all : 
+  forall n Hp t v_size, 
+    valid_config (t, Hp, v_size) ->
+    (forall n', 
+      n < n' -> not (elem_of n' (addrs t))) ->
+    forall n', 
+    not (elem_of n' (addrs (HT_unfold_abstract n Hp t))).
+Proof. 
+  induction n; intros.
+  - pose proof HT_unfold_abstract_at_n 0 Hp t v_size H0 H1 n' ltac:(lia).
+    assumption.
+  - unfold not. intros.
+    simpl in H0.
+    simpl in H2. 
+    destruct (lookup_heap Hp (S n)) eqn:lkuphp.
+    + specialize (IHn Hp (HTunfold h (S n) t) v_size).
+      simpl in H2. 
+      (* eapply IHn.  *)
+      eapply IHn; [ | | eapply H2]; try lia.
+      2:{
+        intros. eapply HTunfold_upper_bound; try eassumption.
+      }
+      eapply HTunfold_preserves_valid_config; try eassumption.
+    + eapply IHn; try eassumption; try lia.
+      intros. unfold not. intros. 
+      assert (S n <= n'0) as ineq by lia.  
+      eapply Nat.lt_eq_cases in ineq.
+      eapply H1; try eassumption.  
+      destruct ineq; try lia. subst. exfalso. 
+      destruct H0 as (dag, (full, vld)).
+      specialize (vld (S n) H4).     
+      destruct Hp; unfold dom_heap in vld; simpl in vld.
+      eapply elem_of_dom in vld.
+      destruct vld; unfold lookup_heap in lkuphp; simpl in lkuphp.
+      congruence.
+    Unshelve. 
+    all:apply 0.
+Qed.
+
+Lemma HT_unfold_concrete_clean : 
+  forall Hp t v_size, 
+    valid_config (t, Hp, v_size) ->
+    forall n', 
+    not (elem_of n' (addrs (HT_unfold_concrete Hp t))).
+Proof. 
+  unfold HT_unfold_concrete. 
+  intros; eapply HT_unfold_abstract_all; try eassumption.
+  intros. 
+  destruct H0 as (dag, (full, vld)).
+  unfold not; intros. 
+  specialize (vld n'0 H0).
+  unfold dom_heap in vld. destruct Hp; simpl in *.
+  pose proof unsquash (wf_dec _ _) wf0.
+  specialize (H3 n'0 ltac:(lia)).
+  eapply elem_of_dom in vld.
+  destruct vld. congruence.
+Qed.     
