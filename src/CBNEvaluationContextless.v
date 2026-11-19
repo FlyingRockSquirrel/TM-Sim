@@ -34,6 +34,41 @@ Fixpoint cbn_contextless_step t Hp v_size :=
     end
   end. 
 
+  Inductive cbn_reduce_rel (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
+(* | CBN_no_step : 
+  forall t Hp, 
+  cbn_reduce_rel v_size t Hp 0 t Hp *)
+| CBN_step_left : 
+  forall t1 Hp t1' Hp' t2 , 
+  cbn_reduce_rel v_size t1 Hp t1' Hp' ->
+  cbn_reduce_rel v_size (HApp t1 t2) Hp (HApp t1' t2) Hp'
+| CBN_step_fb : 
+  forall n' t1' t2 Hp', 
+    (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
+    parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
+    cbn_reduce_rel v_size (HApp (HAbs n' t1') t2) Hp' (subst t2 n' t1') Hp'
+| CBN_step_hb : 
+  forall Hp n' t1' t2 Hp', 
+    (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
+    ~ (parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp')) ->
+    cbn_reduce_rel v_size (HApp (HAbs n' t1') t2) Hp' (subst (HAddr (nxt Hp)) n' t1') (insert_heap Hp' t2 (Nat.log2_up (card_dom_heap Hp')))
+| CBN_step_ls : 
+  forall n' Hp' t',
+  (* cbn_reduce_rel v_size t Hp (HAddr n') Hp' -> *)
+  lookup_heap Hp' n' = Some t' ->
+  cbn_reduce_rel v_size (HAddr n') Hp' t' Hp'.
+
+Inductive cbn_reduce_rel_ls (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
+| CBN_step_left_ls : 
+  forall t1 Hp t1' Hp' t2 , 
+  cbn_reduce_rel_ls v_size t1 Hp t1' Hp' ->
+  cbn_reduce_rel_ls v_size (HApp t1 t2) Hp (HApp t1' t2) Hp'
+| CBN_step_ls_ls : 
+  forall n' Hp' t',
+  (* cbn_reduce_rel v_size t Hp (HAddr n') Hp' -> *)
+  lookup_heap Hp' n' = Some t' ->
+  cbn_reduce_rel_ls v_size (HAddr n') Hp' t' Hp'.
+
   Lemma cbn_contextless_step_heap_expand :
   forall t t' Hp Hp' v_size, 
     cbn_contextless_step t Hp v_size = Some (t', Hp', v_size) ->
@@ -270,3 +305,28 @@ Proof.
     pose proof trace_valid_config_step _ _ _ _ _ H0 stepeq.
     eapply IHn; [apply H2|apply H1].
 Qed.    
+
+Lemma cbn_reduce_rel_ls_no_heapmod : 
+  forall vs t Hp t' Hp', 
+    cbn_reduce_rel_ls vs t Hp t' Hp' ->
+    Hp = Hp'.
+Proof.
+  intros vs t Hp t' Hp' H0. induction H0; congruence.
+Qed. 
+
+Lemma cbn_step_ls_sound : 
+  forall v_size t Hp t' Hp', 
+  valid_config (t, Hp, v_size) ->
+  cbn_reduce_rel_ls v_size t Hp t' Hp' ->
+  HT_unfold_concrete Hp t = HT_unfold_concrete Hp' t'. 
+Proof.
+  intros v_size t Hp t' Hp' H0 H1. pose proof True as H. induction H1.
+  - do 2 rewrite HT_unfold_concrete_app. 
+    rewrite (cbn_reduce_rel_ls_no_heapmod _ _ _ _ _ H1) in *.
+    rewrite IHcbn_reduce_rel_ls; try reflexivity.
+    destruct H0 as (dag, (full, vld)).
+    split; try split; try tauto.
+    unfold term_valid_heap. intros.
+    eapply (vld n ltac:(simpl; eapply elem_of_union; left; eapply H0)).     
+  - eapply HT_unfold_concrete_addr; try eassumption.
+Qed. 

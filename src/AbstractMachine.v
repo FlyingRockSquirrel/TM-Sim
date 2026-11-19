@@ -854,48 +854,7 @@ Qed.
 
 (* (subst (HAddr (nxt Hp)) n t1, insert_heap Hp t2, v_size) *)
 
-Inductive cbn_reduce_rel (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
-(* | CBN_no_step : 
-  forall t Hp, 
-  cbn_reduce_rel v_size t Hp 0 t Hp *)
-| CBN_step_left : 
-  forall t1 Hp t1' Hp' t2 , 
-  cbn_reduce_rel v_size t1 Hp t1' Hp' ->
-  cbn_reduce_rel v_size (HApp t1 t2) Hp (HApp t1' t2) Hp'
-| CBN_step_fb : 
-  forall n' t1' t2 Hp', 
-    (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
-    parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
-    cbn_reduce_rel v_size (HApp (HAbs n' t1') t2) Hp' (subst t2 n' t1') Hp'
-| CBN_step_hb : 
-  forall Hp n' t1' t2 Hp', 
-    (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
-    ~ (parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp')) ->
-    cbn_reduce_rel v_size (HApp (HAbs n' t1') t2) Hp' (subst (HAddr (nxt Hp)) n' t1') (insert_heap Hp' t2 (Nat.log2_up (card_dom_heap Hp')))
-| CBN_step_ls : 
-  forall n' Hp' t',
-  (* cbn_reduce_rel v_size t Hp (HAddr n') Hp' -> *)
-  lookup_heap Hp' n' = Some t' ->
-  cbn_reduce_rel v_size (HAddr n') Hp' t' Hp'.
 
-Inductive cbn_reduce_rel_ls (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
-| CBN_step_left_ls : 
-  forall t1 Hp t1' Hp' t2 , 
-  cbn_reduce_rel_ls v_size t1 Hp t1' Hp' ->
-  cbn_reduce_rel_ls v_size (HApp t1 t2) Hp (HApp t1' t2) Hp'
-| CBN_step_ls_ls : 
-  forall n' Hp' t',
-  (* cbn_reduce_rel v_size t Hp (HAddr n') Hp' -> *)
-  lookup_heap Hp' n' = Some t' ->
-  cbn_reduce_rel_ls v_size (HAddr n') Hp' t' Hp'.
-
-Lemma cbn_reduce_rel_ls_no_heapmod : 
-  forall vs t Hp t' Hp', 
-    cbn_reduce_rel_ls vs t Hp t' Hp' ->
-    Hp = Hp'.
-Proof.
-  intros. induction H0; congruence.
-Qed.      
 
 Lemma HTunfold_no_instance : 
 forall t n t', 
@@ -992,20 +951,109 @@ Proof.
   intros. unfold HT_unfold_concrete. eapply HT_unfold_abstract_app.
 Qed.  
 
-Lemma cbn_step_ls_sound : 
-  forall v_size t Hp t' Hp', 
-  valid_config (t, Hp, v_size) ->
-  cbn_reduce_rel_ls v_size t Hp t' Hp' ->
-  HT_unfold_concrete Hp t = HT_unfold_concrete Hp' t'. 
+Fixpoint HT_gc_abstract n t acc : Heap :=
+  match n with
+  | 0 => 
+    match lookup_heap acc 0 with
+    | Some t' => if HTerm_eq_dec (HTunfold t' 0 t) t then del_heap acc 0 else acc
+    | None => acc
+    end
+  | S n' => 
+    match lookup_heap acc (S n') with
+    | Some t' => if HTerm_eq_dec (HTunfold t' (S n') t) t then HT_gc_abstract n' (HTunfold t' (S n') t) (del_heap acc (S n')) else HT_gc_abstract n' (HTunfold t' (S n') t) acc
+    | None => HT_gc_abstract n' t acc
+    end
+  end.
+
+Definition HT_gc_concrete t acc : Heap := HT_gc_abstract (nxt acc) t acc.
+
+
+Lemma HT_unfold_abstract_domain : 
+  forall n Hp Hp', 
+    (forall n', n' <= n -> lookup_heap Hp n' = lookup_heap Hp' n') ->
+  forall t, 
+    HT_unfold_abstract n Hp t = HT_unfold_abstract n Hp' t.
+Proof.  
+  induction n; intros Hp Hp' H t.
+  - simpl in *. specialize (H 0 ltac:(lia)).
+    rewrite H. 
+    destruct (lookup_heap Hp' 0); reflexivity.
+  - simpl. pose proof (H (S n) ltac:(lia)) as H'.
+    rewrite H'. destruct (lookup_heap Hp' (S n)); eapply IHn; intros; eapply H; try lia.
+Qed.   
+
+Lemma HT_gc_abstract_out_of_domain : 
+  forall n t Hp, 
+    forall n', 
+      n < n' -> 
+    lookup_heap (HT_gc_abstract n t Hp) n' = lookup_heap Hp n'. 
+Proof.  
+  induction n; intros t Hp n' H.
+  - simpl. destruct (lookup_heap Hp 0) eqn:lkup.
+    + destruct (HTerm_eq_dec (HTunfold h 0 t) t); try reflexivity.
+      unfold lookup_heap. unfold del_heap. simpl. rewrite lookup_delete_ne; try lia.
+      reflexivity.
+    + reflexivity.
+  - simpl. destruct (lookup_heap Hp (S n)).
+    + destruct (HTerm_eq_dec (HTunfold h (S n) t) t).
+      2:{ rewrite IHn; try lia. reflexivity.  }
+      assert (lookup_heap Hp n' = lookup_heap (del_heap Hp (S n)) n').
+      { unfold lookup_heap, del_heap. simpl. rewrite lookup_delete_ne; try lia. reflexivity. } 
+      rewrite H0. apply IHn.  
+      lia.
+    + apply IHn. lia.   
+Qed.   
+
+
+Lemma gc_preserves_None : 
+  forall n n' t Hp,
+  lookup_heap Hp n' = None ->
+  lookup_heap (HT_gc_abstract n t Hp) n' = None.
 Proof.
-  intros. induction H1.
-  - do 2 rewrite HT_unfold_concrete_app. 
-    rewrite (cbn_reduce_rel_ls_no_heapmod _ _ _ _ _ H1) in *.
-    rewrite IHcbn_reduce_rel_ls; try reflexivity.
-    destruct H0 as (dag, (full, vld)).
-    split; try split; try tauto.
-    unfold term_valid_heap. intros.
-    eapply (vld n ltac:(simpl; eapply elem_of_union; left; eapply H0)).     
-  - eapply HT_unfold_concrete_addr; try eassumption.
-Qed. 
+  induction n; intros.
+  - simpl. destruct (lookup_heap Hp 0) eqn:lkup; try assumption.
+    destruct (HTerm_eq_dec (HTunfold h 0 t) t); try assumption.
+    unfold del_heap. unfold lookup_heap. simpl.
+    destruct (PeanoNat.Nat.eq_dec n' 0); subst.
+    + rewrite lookup_delete_eq. simpl. reflexivity.
+    + rewrite lookup_delete_ne; try congruence.
+      apply H0.
+  - simpl. destruct (lookup_heap Hp (S n)) eqn:lkup.
+    + destruct (HTerm_eq_dec (HTunfold h (S n) t) t) eqn:teq.
+      * rewrite e. eapply IHn. destruct (PeanoNat.Nat.eq_dec (S n) (n')); subst.
+        -- unfold lookup_heap. unfold del_heap. simpl. rewrite lookup_delete_eq.
+          simpl. reflexivity.
+        -- unfold lookup_heap. unfold del_heap. simpl. rewrite lookup_delete_ne; try congruence. apply H0.
+      * apply IHn. assumption.    
+    + apply IHn; try eassumption.
+Qed.           
+
+
+Lemma unfold_gc_noop : 
+  forall n t Hp,
+    HT_unfold_abstract n Hp t = HT_unfold_abstract n (HT_gc_abstract n t Hp) t.
+Proof.
+  induction n; intros t Hp.
+  - simpl in *. destruct (lookup_heap Hp 0) eqn:lkup; try congruence.
+    + destruct (HTerm_eq_dec (HTunfold h 0 t) t); simpl.
+      * unfold lookup_heap. unfold del_heap. simpl.
+        rewrite lookup_delete_eq. simpl. assumption.
+      * rewrite lkup. reflexivity.
+    + rewrite lkup; reflexivity.
+  - simpl. destruct (lookup_heap Hp (S n)) eqn:lkup. 
+    + destruct (HTerm_eq_dec (HTunfold h (S n) t) t).
+      * rewrite e.
+        pose proof HT_unfold_abstract_domain n Hp ((del_heap Hp (S n))).
+        rewrite H0 at 1.
+        2:{ intros. unfold lookup_heap. unfold del_heap. simpl. rewrite lookup_delete_ne; try lia. reflexivity. }
+        pose proof gc_preserves_None n (S n) t (del_heap Hp (S n)) as H1.
+        unfold lookup_heap, del_heap in H1. simpl in H1.
+        rewrite lookup_delete_eq in H1. simpl in H1.
+        specialize (H1 eq_refl).
+        unfold lookup_heap. unfold del_heap. rewrite H1. eapply IHn.
+      * pose proof HT_gc_abstract_out_of_domain n (HTunfold h (S n) t) Hp (S n) ltac:(lia).
+        rewrite H0. rewrite lkup. eapply IHn.    
+    + rewrite HT_gc_abstract_out_of_domain; try lia.
+      rewrite lkup. eapply IHn.
+Qed.        
 
