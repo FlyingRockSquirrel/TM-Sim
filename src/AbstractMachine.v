@@ -25,6 +25,17 @@ match body with
 | HAddr n => HAddr n
 end. 
 
+Fixpoint is_closed_aux (vars : list nat) (t : HTerm) : Prop := 
+  match t with
+  | HVar n => In n vars
+  | HApp t1 t2 => is_closed_aux vars t1 /\ is_closed_aux vars t2
+  | HAbs n t' => is_closed_aux (n::vars) t'
+  | HAddr _ => True
+  end.  
+
+Definition is_closed (t : HTerm) : Prop :=
+  is_closed_aux nil t. 
+
 Fixpoint t_subst substin substout body :=
 match body with
 | Var i =>
@@ -34,6 +45,48 @@ match body with
   if Nat.eqb n substout then Abs n t 
     else Abs n (t_subst substin substout t)
 end. 
+
+Lemma subst_is_closed_noop_aux : 
+  forall t n t' aux, 
+    ~In n aux ->
+    is_closed_aux aux t ->
+    subst t' n t = t.
+Proof. 
+  induction t; intros n' t' aux H H0.
+  - simpl in *.
+    destruct (n =? n') eqn:neq; simpl; try reflexivity. 
+    eapply Nat.eqb_eq in neq. subst.
+    exfalso. apply H. apply H0.
+  - simpl in *.
+    rewrite (IHt1 _ _ aux); try rewrite (IHt2 _ _ aux); try assumption; try tauto.
+  - simpl in *. destruct (n =? n') eqn:neq; try reflexivity.
+    eapply Nat.eqb_neq in neq.
+    rewrite (IHt _ _ (n :: aux)); try reflexivity.
+    + unfold not. intros. destruct H1; try congruence.
+    + assumption.
+  - simpl. reflexivity.        
+Qed. 
+
+Lemma subst_is_closed_noop :
+  forall t n t', 
+    is_closed t ->
+      subst t' n t = t.
+Proof.
+  intros. eapply (subst_is_closed_noop_aux _ _ _ nil).
+  - simpl. intros H0. inversion H0.
+  - eapply H.
+Qed.  
+
+Fixpoint t_step t : option Term :=
+  match t with
+  | App (Abs n t1) t2 => Some (t_subst t2 n t1)
+  | App t1 t2 =>
+    match t_step t1 with
+    | Some t1' => Some (App t1' t2)
+    | None => None
+    end
+  | _ => None
+  end.
 
 Fixpoint HTunfold substin n body :=
 match body with
@@ -468,6 +521,13 @@ Definition term_valid_heap t Hp : Prop :=
   forall n, 
     elem_of n (addrs t) ->
     elem_of n (dom_heap Hp).
+
+Definition heap_closed Hp : Prop :=
+  forall n t, 
+    lookup_heap Hp n = Some t ->
+    is_closed t.
+
+ 
 
 Definition valid_config (config : configuration) : Prop :=
   let '(t, Hp, v_size) := config in 
@@ -944,6 +1004,15 @@ Proof.
   - simpl. destruct (lookup_heap Hp (S n)); eapply IHn.
 Qed.
 
+Lemma HT_unfold_abstract_abs : 
+  forall n Hp n' t, 
+    HT_unfold_abstract n Hp (HAbs n' t) = HAbs n' (HT_unfold_abstract n Hp t).
+Proof. 
+  induction n; intros.
+  - simpl in *. destruct (lookup_heap Hp 0); reflexivity.
+  - simpl. destruct (lookup_heap Hp (S n)); eapply IHn.
+Qed.
+
 Lemma HT_unfold_concrete_app : 
   forall Hp t1 t2, 
     HT_unfold_concrete Hp (HApp t1 t2) = HApp (HT_unfold_concrete Hp t1) (HT_unfold_concrete Hp t2).
@@ -1055,5 +1124,149 @@ Proof.
         rewrite H0. rewrite lkup. eapply IHn.    
     + rewrite HT_gc_abstract_out_of_domain; try lia.
       rewrite lkup. eapply IHn.
-Qed.        
+Qed.     
 
+Lemma gc_preserves_nxt :  
+  forall n t Hp, 
+    nxt Hp = nxt (HT_gc_abstract n t Hp).
+Proof.
+  induction n; intros t Hp.
+  - simpl. destruct (lookup_heap Hp 0); simpl; try reflexivity.
+    destruct (HTerm_eq_dec (HTunfold h 0 t) t); try reflexivity.
+  - simpl. destruct (lookup_heap Hp (S n)); simpl; try (eapply IHn; eauto).
+    destruct (HTerm_eq_dec (HTunfold h (S n) t) t); simpl; try (eapply IHn; eauto).
+    assert (nxt Hp = nxt (del_heap Hp (S n))) by (unfold del_heap; simpl; reflexivity).
+    rewrite H0. eapply IHn.    
+Qed.   
+ 
+Lemma unfold_gc_conctere_noop : 
+  forall t Hp, 
+    HT_unfold_concrete Hp t = HT_unfold_concrete (HT_gc_concrete t Hp) t.
+Proof.
+  intros. unfold HT_unfold_concrete. unfold HT_gc_concrete.
+  rewrite <- gc_preserves_nxt.  
+  eapply unfold_gc_noop.
+Qed.    
+
+Lemma valid_config_app :  
+  forall t1 t2 Hp v_size, 
+    valid_config (HApp t1 t2, Hp, v_size) ->
+    valid_config (t1, Hp, v_size) /\ valid_config (t2, Hp, v_size).
+Proof.
+  intros t1 t2 Hp v_size H0. 
+  destruct H0 as (dag, (full, vld)).
+  split; split; try split; try tauto.
+  - unfold term_valid_heap. intros.
+    specialize (vld n).
+    simpl in vld.
+    eapply vld; set_solver.
+  - unfold term_valid_heap. intros.
+    specialize (vld n).
+    simpl in vld.
+    eapply vld; set_solver.
+Qed. 
+
+Lemma valid_config_abs :  
+  forall n t Hp v_size, 
+    valid_config (HAbs n t, Hp, v_size) ->
+    valid_config (t, Hp, v_size).
+Proof.
+  intros n t Hp v_size H0. 
+  destruct H0 as (dag, (full, vld)).
+  split; try split; try tauto.
+Qed. 
+
+Lemma to_term_clean_term : 
+  forall t, 
+    (forall n, n ∉ addrs t) ->
+    exists t', hterm_to_term t = Some t'.
+Proof. 
+  induction t; intros H.
+  - simpl in H. simpl. eexists; reflexivity.
+  - simpl in *.
+    specialize (IHt1 ltac:(intros; specialize (H n); set_solver)).
+    specialize (IHt2 ltac:(intros; specialize (H n); set_solver)).
+    destruct IHt1 as (?, IHt1); destruct IHt2 as (?, IHt2).
+    rewrite IHt1; rewrite IHt2.
+    eexists; reflexivity.
+  - simpl in *.  
+    specialize (IHt H).
+    destruct IHt as (?, IHt).
+    rewrite IHt.
+    eexists; reflexivity.
+  - simpl in H. specialize (H n). set_solver.
+Qed.    
+
+Lemma unfold_to_term : 
+  forall t Hp v_size, 
+    valid_config (t, Hp, v_size) ->
+    exists t', 
+      hterm_to_term (HT_unfold_concrete Hp t) = Some t'. 
+Proof. 
+  intros t Hp v_size H.
+  eapply to_term_clean_term.
+  eapply HT_unfold_concrete_clean. eassumption.     
+Qed. 
+
+Lemma hterm_to_term_subst_comm :
+  forall t2 t1 t1' t2' n, 
+    hterm_to_term t1 = Some t1' ->
+    hterm_to_term t2 = Some t2' ->
+    hterm_to_term (subst t1 n t2) = Some (t_subst t1' n t2').
+Proof.
+  induction t2; intros t1 t1' t2' n' H H0; try discriminate. 
+  - simpl in *. inversion H0; subst. unfold t_subst.
+    destruct (n =? n') eqn:neq; try assumption.
+  - simpl in *.   
+    destruct (hterm_to_term t2_1) eqn:t2_1eq; try discriminate.
+    destruct (hterm_to_term t2_2) eqn:t2_2eq; try discriminate. 
+    inversion H0; subst.
+    rewrite (IHt2_1 t1 t1' t n' H eq_refl).
+    rewrite (IHt2_2 t1 t1' t0 n' H eq_refl).
+    simpl. reflexivity.
+  - simpl in *.    
+    destruct (hterm_to_term t2) eqn:t2eq; try discriminate.
+    inversion H0; subst. simpl.    
+    destruct (n =? n') eqn:neq; try congruence; [simpl; rewrite t2eq; reflexivity|]. 
+    simpl. 
+    rewrite (IHt2 t1 t1' t n' H eq_refl).
+    reflexivity.
+Qed.   
+
+Lemma HTunfold_subst_comm : 
+  forall t1 h n t2 n', 
+    is_closed h ->
+    HTunfold h n (subst t2 n' t1) = subst (HTunfold h n t2) n' (HTunfold h n t1).
+Proof.
+  induction t1; intros h n1 t2 n2 H.
+  - simpl. destruct (n =? n2); reflexivity.
+  - simpl; try rewrite <- IHt1_1; try rewrite <- IHt1_2; try
+    reflexivity; try assumption. 
+  - simpl. rewrite <- IHt1; try destruct (n =? n2); try reflexivity; try assumption. 
+  - simpl. destruct (n1 =? n); simpl; try reflexivity.
+    rewrite subst_is_closed_noop; try reflexivity; try assumption.
+Qed.  
+
+Lemma HT_unfold_abstract_subst_comm : 
+  forall n Hp t1 n' t2, 
+    heap_closed Hp ->
+    HT_unfold_abstract n Hp (subst t1 n' t2) = subst (HT_unfold_abstract n Hp t1) n' (HT_unfold_abstract n Hp t2).
+Proof.
+  induction n; intros Hp t1 n' t2 hclos.
+  - simpl. 
+    destruct (lookup_heap Hp 0) eqn:lkup; try reflexivity.
+    eapply HTunfold_subst_comm.
+    eapply hclos. apply lkup.
+  - simpl. destruct (lookup_heap Hp (S n)) eqn:lkup.
+    + rewrite HTunfold_subst_comm; [|eapply hclos; eassumption].
+      eapply IHn; assumption.
+    + eapply IHn. assumption.
+Qed. 
+
+Lemma  HT_unfold_concrete_subst_comm : 
+    forall Hp t1 n' t2, 
+    heap_closed Hp ->
+    HT_unfold_concrete Hp (subst t1 n' t2) = subst (HT_unfold_concrete Hp t1) n' (HT_unfold_concrete Hp t2).
+Proof.
+  intros. unfold HT_unfold_concrete in *. eapply HT_unfold_abstract_subst_comm. assumption.
+Qed.    

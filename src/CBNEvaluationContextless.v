@@ -69,7 +69,18 @@ Inductive cbn_reduce_rel_ls (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> P
   lookup_heap Hp' n' = Some t' ->
   cbn_reduce_rel_ls v_size (HAddr n') Hp' t' Hp'.
 
-  Lemma cbn_contextless_step_heap_expand :
+Inductive cbn_reduce_rel_fb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
+| CBN_step_left_fb : 
+  forall t1 Hp t1' Hp' t2 , 
+  cbn_reduce_rel_fb v_size t1 Hp t1' Hp' ->
+  cbn_reduce_rel_fb v_size (HApp t1 t2) Hp (HApp t1' t2) Hp'
+| CBN_step_fb_fb : 
+  forall n' t1' t2 Hp', 
+    (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
+    parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
+    cbn_reduce_rel_fb v_size (HApp (HAbs n' t1') t2) Hp' (subst t2 n' t1') Hp'.
+
+Lemma cbn_contextless_step_heap_expand :
   forall t t' Hp Hp' v_size, 
     cbn_contextless_step t Hp v_size = Some (t', Hp', v_size) ->
     (forall n t, 
@@ -320,7 +331,7 @@ Lemma cbn_step_ls_sound :
   cbn_reduce_rel_ls v_size t Hp t' Hp' ->
   HT_unfold_concrete Hp t = HT_unfold_concrete Hp' t'. 
 Proof.
-  intros v_size t Hp t' Hp' H0 H1. pose proof True as H. induction H1.
+  intros v_size t Hp t' Hp' H0 H1. pose proof True as H. induction H1. 
   - do 2 rewrite HT_unfold_concrete_app. 
     rewrite (cbn_reduce_rel_ls_no_heapmod _ _ _ _ _ H1) in *.
     rewrite IHcbn_reduce_rel_ls; try reflexivity.
@@ -329,4 +340,61 @@ Proof.
     unfold term_valid_heap. intros.
     eapply (vld n ltac:(simpl; eapply elem_of_union; left; eapply H0)).     
   - eapply HT_unfold_concrete_addr; try eassumption.
+Qed. 
+
+Lemma fb_same_heap : 
+  forall v_size t Hp t' Hp', 
+    cbn_reduce_rel_fb v_size t Hp t' Hp' ->
+    Hp = Hp'.
+Proof.
+  intros v_size t Hp t' Hp' H. induction H.
+  - subst. reflexivity.
+  - reflexivity.
+Qed.       
+
+Lemma cbn_step_fb_sound : 
+  forall v_size t Hp t' Hp',
+  valid_config (t, Hp, v_size) ->
+  is_closed t ->
+  heap_closed Hp ->
+  cbn_reduce_rel_fb v_size t Hp t' Hp' ->
+  forall lt lt', 
+  hterm_to_term (HT_unfold_concrete Hp t) = Some lt ->
+  hterm_to_term (HT_unfold_concrete Hp' t') = Some lt' ->
+  t_step lt = Some lt'.
+Proof.
+  intros v_size t Hp t' Hp' vconfig tclos hpclos H. induction H; intros lt lt' H0 H1.
+  - rewrite HT_unfold_concrete_app in H0. simpl in H0.
+    rewrite HT_unfold_concrete_app in H1. simpl in H1.
+    destruct (hterm_to_term (HT_unfold_concrete Hp' t2)) eqn:htt2';
+    destruct (hterm_to_term (HT_unfold_concrete Hp' t1')) eqn:htt1';
+    destruct (hterm_to_term (HT_unfold_concrete Hp t1)) eqn:htt1; 
+    destruct (hterm_to_term (HT_unfold_concrete Hp t2)) eqn:htt2; 
+    try discriminate. inversion H1; subst. inversion H0; subst.  
+    pose proof fb_same_heap _ _ _ _ _ H.
+    subst .
+    rewrite htt2 in htt2'.
+    inversion htt2'; subst.
+    pose proof valid_config_app _ _ _ _ vconfig as H2.
+    destruct H2 as (H2, H3).
+    unfold is_closed in tclos.
+    simpl in tclos.
+    destruct tclos as (tclos1, tclos2).   
+    specialize (IHcbn_reduce_rel_fb H2 ltac:(unfold is_closed; assumption) ltac:(assumption) t3 t0 eq_refl eq_refl).
+    destruct t3; simpl in *; try congruence.
+    rewrite IHcbn_reduce_rel_fb. reflexivity.        
+  - rewrite HT_unfold_concrete_app in H0. simpl in H0.
+    destruct (hterm_to_term (HT_unfold_concrete Hp' t2)) eqn:htt2';
+    destruct (hterm_to_term (HT_unfold_concrete Hp' (HAbs n' t1'))) eqn:htt1';
+    try discriminate.
+    inversion H0; subst. simpl.
+    unfold HT_unfold_concrete in htt1'. 
+    rewrite HT_unfold_abstract_abs in htt1'.
+    simpl in htt1'.  
+    destruct (hterm_to_term (HT_unfold_abstract (nxt Hp') Hp' t1')) eqn:t1destruct; try discriminate.
+    inversion htt1'; subst. rewrite <- H1.
+    rewrite HT_unfold_concrete_subst_comm; try assumption.
+    unfold HT_unfold_concrete at 2. 
+    rewrite (hterm_to_term_subst_comm _ _ _ _ n' htt2' t1destruct).
+    reflexivity.  
 Qed. 
