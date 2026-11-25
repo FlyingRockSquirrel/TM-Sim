@@ -91,6 +91,17 @@ Inductive cbn_reduce_rel_sb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> P
     ~parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
     cbn_reduce_rel_sb v_size (HApp (HAbs n' t1') t2) Hp' (subst (HAddr (nxt Hp')) n' t1') (insert_heap Hp' t2 (Nat.log2_up (card_dom_heap Hp'))).
 
+Lemma cbn_reduce_rel_sb_insert : 
+  forall v_size t1 Hp t1' Hp', 
+    cbn_reduce_rel_sb v_size t1 Hp t1' Hp' ->
+    exists t n, 
+      Hp' = insert_heap Hp t n.
+Proof.
+  intros v_size t1 Hp t1' Hp' H; induction H. 
+  - eassumption.
+  - exists t2. exists (Nat.log2_up (card_dom_heap Hp')). reflexivity.
+Qed.   
+
 Lemma cbn_contextless_step_heap_expand :
   forall t t' Hp Hp' v_size, 
     cbn_contextless_step t Hp v_size = Some (t', Hp', v_size) ->
@@ -429,7 +440,37 @@ Proof.
     destruct (hterm_to_term (HT_unfold_concrete Hp t1)) eqn:htt1; 
     destruct (hterm_to_term (HT_unfold_concrete Hp t2)) eqn:htt2; 
     try discriminate. inversion H1; subst. inversion H0; subst.
-    assert ((HT_unfold_concrete Hp t2) = (HT_unfold_concrete Hp' t2)) as uneq by admit.
+    assert ((HT_unfold_concrete Hp t2) = (HT_unfold_concrete Hp' t2)) as uneq.
+    {
+      pose proof cbn_reduce_rel_sb_insert _ _ _ _ _ H.
+      destruct H2 as (t5, (n0, H3)).
+      subst.
+      unfold HT_unfold_concrete. unfold insert_heap. simpl. unfold lookup_heap.
+      simpl. rewrite lookup_insert_ne; try lia.
+      pose proof unsquash (wf_dec _ _) (wf Hp) (S (nxt Hp)) ltac:(lia).
+      rewrite H2. simpl.
+      destruct Hp; simpl.
+      destruct nxt.
+      - simpl in *. unfold lookup_heap; simpl. rewrite lookup_insert_eq; try lia.
+        pose proof unsquash (wf_dec _ _) (wf) 0 ltac:(lia).
+        rewrite H4. simpl.
+        unfold HT_unfold_concrete in htt2.
+        simpl in htt2.
+        unfold lookup_heap in htt2. simpl in htt2.
+        rewrite H4 in htt2. simpl in htt2.
+        symmetry. eapply hterm_to_term_entails_unfold_noop. eassumption.
+      - simpl. unfold lookup_heap; simpl. simpl in H2.        
+        pose proof unsquash (wf_dec _ _) (wf) (S nxt) ltac:(lia) as H4.
+        rewrite H4.
+        rewrite lookup_insert_eq; try lia. simpl.
+        unfold HT_unfold_concrete in htt2.
+        simpl in htt2. unfold lookup_heap in htt2. simpl in htt2. rewrite H4 in htt2.
+        simpl in htt2.      
+        rewrite (HT_unfold_abstract_domain_gen t2 nxt _ _ htt2 (S nxt) t5 ltac:(lia)).
+        eapply HT_unfold_abstract_domain; simpl; intros.
+        unfold lookup_heap. simpl.
+        rewrite lookup_insert_ne; try lia. reflexivity.       
+    }
     rewrite <- uneq in *. 
     rewrite htt2' in htt2. inversion htt2; subst.
     pose proof valid_config_app _ _ _ _ vconfig as H3.
@@ -528,5 +569,4 @@ Proof.
       rewrite H6 in *.
       unfold HT_unfold_concrete.
       symmetry. eapply hterm_to_term_subst_comm; try eassumption.  
-Admitted. 
-    (* idea is that on the left, one unfold gets you back to the abstract case t2 case for the caller, and t1' straight up does not change its unfolding. Can show this from the validity of the configuration.  *)
+Qed. 

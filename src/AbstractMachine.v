@@ -1147,9 +1147,6 @@ Qed.
 
 Lemma HT_unfold_abstract_domain_gen : 
   forall t n Hp t', 
-    (* True  *)
-    (* heap_dag Hp -> *)
-    (* (forall n', n' <= n -> lookup_heap Hp n' = lookup_heap Hp' n') -> *)
     hterm_to_term (HT_unfold_abstract n Hp t) = Some t' ->
   forall n' t0,
     n < n' -> 
@@ -1435,3 +1432,40 @@ Proof.
     reflexivity.
   - simpl in *. discriminate.
 Qed.   
+
+Lemma hterm_to_term_unfold_noop :
+  forall t t', 
+    hterm_to_term t = Some t' ->
+    forall n t0, 
+      HTunfold t0 n t = t. 
+Proof. 
+  induction t; intros t' H n' t0.
+  - simpl; reflexivity.
+  - simpl in *.   
+    destruct (hterm_to_term t1) eqn:t1eq; try discriminate.
+    destruct (hterm_to_term t2) eqn:t2eq; try discriminate.
+    inversion H; subst. 
+    erewrite IHt1; try eassumption; try reflexivity. 
+    erewrite IHt2; try eassumption; try reflexivity.
+  - simpl in *.
+    destruct (hterm_to_term t) eqn:teq; try discriminate.
+    inversion H; subst. 
+    erewrite IHt; try eassumption; try reflexivity.
+  - simpl in *; discriminate. 
+Qed. 
+   
+
+Lemma hterm_to_term_some_HT_unfold_noop : 
+  forall n t t', 
+    hterm_to_term t = Some t' ->
+      forall Hp , 
+        HT_unfold_abstract n Hp t = t. 
+Proof.
+  induction n; intros t t' H Hp. 
+  - simpl in *. destruct (lookup_heap Hp 0); try reflexivity. 
+    eapply hterm_to_term_entails_unfold_noop. eassumption. 
+  - simpl in *. destruct (lookup_heap Hp (S n)) eqn:lkup; try reflexivity. 
+    + erewrite hterm_to_term_unfold_noop; try eassumption. 
+      eapply IHn; try eassumption.  
+    + eapply IHn; try eassumption.  
+Qed. 
