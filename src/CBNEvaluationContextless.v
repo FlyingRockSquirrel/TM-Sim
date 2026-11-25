@@ -80,6 +80,17 @@ Inductive cbn_reduce_rel_fb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> P
     parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
     cbn_reduce_rel_fb v_size (HApp (HAbs n' t1') t2) Hp' (subst t2 n' t1') Hp'.
 
+Inductive cbn_reduce_rel_sb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
+| CBN_step_left_sb : 
+  forall t1 Hp t1' Hp' t2 , 
+  cbn_reduce_rel_sb v_size t1 Hp t1' Hp' ->
+  cbn_reduce_rel_sb v_size (HApp t1 t2) Hp (HApp t1' t2) Hp'
+| CBN_step_sb_sb : 
+  forall n' t1' t2 Hp', 
+    (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
+    ~parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
+    cbn_reduce_rel_sb v_size (HApp (HAbs n' t1') t2) Hp' (subst (HAddr (nxt Hp')) n' t1') (insert_heap Hp' t2 (Nat.log2_up (card_dom_heap Hp'))).
+
 Lemma cbn_contextless_step_heap_expand :
   forall t t' Hp Hp' v_size, 
     cbn_contextless_step t Hp v_size = Some (t', Hp', v_size) ->
@@ -398,3 +409,124 @@ Proof.
     rewrite (hterm_to_term_subst_comm _ _ _ _ n' htt2' t1destruct).
     reflexivity.  
 Qed. 
+
+Lemma cbn_step_sb_sound : 
+  forall v_size t Hp t' Hp',
+  valid_config (t, Hp, v_size) ->
+  is_closed t ->
+  heap_closed Hp ->
+  cbn_reduce_rel_sb v_size t Hp t' Hp' ->
+  forall lt lt', 
+  hterm_to_term (HT_unfold_concrete Hp t) = Some lt ->
+  hterm_to_term (HT_unfold_concrete Hp' t') = Some lt' ->
+  t_step lt = Some lt'.
+Proof.
+  intros v_size t Hp t' Hp' vconfig tclos hpclos H. induction H; intros lt lt' H0 H1. 
+  - rewrite HT_unfold_concrete_app in H0. simpl in H0.
+    rewrite HT_unfold_concrete_app in H1. simpl in H1.
+    destruct (hterm_to_term (HT_unfold_concrete Hp' t2)) eqn:htt2';
+    destruct (hterm_to_term (HT_unfold_concrete Hp' t1')) eqn:htt1';
+    destruct (hterm_to_term (HT_unfold_concrete Hp t1)) eqn:htt1; 
+    destruct (hterm_to_term (HT_unfold_concrete Hp t2)) eqn:htt2; 
+    try discriminate. inversion H1; subst. inversion H0; subst.
+    assert ((HT_unfold_concrete Hp t2) = (HT_unfold_concrete Hp' t2)) as uneq by admit.
+    rewrite <- uneq in *. 
+    rewrite htt2' in htt2. inversion htt2; subst.
+    pose proof valid_config_app _ _ _ _ vconfig as H3.
+    destruct H3 as (H3, H4).
+    unfold is_closed in tclos.
+    simpl in tclos.
+    destruct tclos as (tclos1, tclos2).
+    specialize (IHcbn_reduce_rel_sb H3 ltac:(unfold is_closed; eapply tclos1) hpclos t3 t0 eq_refl eq_refl).
+    destruct t3; simpl in *; try congruence.
+    rewrite IHcbn_reduce_rel_sb. reflexivity.  
+  - rewrite HT_unfold_concrete_app in H0. simpl in H0.
+    destruct (hterm_to_term (HT_unfold_concrete Hp' t2)) eqn:htt2';
+    destruct (hterm_to_term (HT_unfold_concrete Hp' (HAbs n' t1'))) eqn:htt1';
+    try discriminate.
+    inversion H0; subst. simpl.
+    unfold HT_unfold_concrete in htt1'. 
+    rewrite HT_unfold_abstract_abs in htt1'.
+    simpl in htt1'.  
+    destruct (hterm_to_term (HT_unfold_abstract (nxt Hp') Hp' t1')) eqn:t1destruct; try discriminate.
+    inversion htt1'; subst. rewrite <- H1.
+    rewrite HT_unfold_concrete_subst_comm; try assumption.
+    2:{ unfold heap_closed.
+      intros n t0 H2. unfold insert_heap, lookup_heap in H2. simpl in H2. destruct (PeanoNat.Nat.eq_dec (nxt Hp') n); subst.
+      - rewrite lookup_insert_eq in H2. simpl in H2. inversion H2; subst.
+        unfold is_closed in tclos. simpl in tclos. destruct tclos as (tclos1, tclos2).
+        eapply tclos2.
+      - rewrite lookup_insert_ne in H2; try congruence.
+        eapply (hpclos n t0 H2). }
+    unfold HT_unfold_concrete at 1.
+    simpl.
+    unfold lookup_heap. simpl.
+    rewrite lookup_insert_ne; try lia.     
+    destruct Hp'. simpl.
+    pose proof unsquash (wf_dec _ _) wf (S nxt) ltac:(lia) as H3.
+    rewrite H3. simpl.
+    unfold HT_unfold_concrete.
+    simpl.     
+    unfold lookup_heap. simpl.
+    rewrite lookup_insert_ne; try lia.
+    rewrite H3. simpl.      
+    set (abr := (Nat.log2_up (card_dom_heap {| H := H2; nxt := nxt; wf := wf |})) ).
+    destruct nxt.
+    + simpl. unfold insert_heap. unfold lookup_heap. simpl. 
+      rewrite lookup_insert_eq. simpl.
+      simpl in t1destruct. unfold lookup_heap in t1destruct.
+      simpl in t1destruct.   
+      pose proof unsquash (wf_dec _ _) wf 0 ltac:(lia) as H4.
+      rewrite H4 in t1destruct.
+      simpl in t1destruct.
+      rewrite (hterm_to_term_entails_unfold_noop t1' t1 t1destruct).
+      unfold HT_unfold_concrete in htt2'.
+      simpl in htt2'. unfold lookup_heap in htt2'.
+      simpl in htt2'. rewrite H4 in htt2'.
+      simpl in htt2'.
+      symmetry. 
+      eapply hterm_to_term_subst_comm; try eassumption.
+    + simpl in t1destruct. unfold insert_heap. simpl. unfold lookup_heap.
+      simpl. 
+      rewrite lookup_insert_eq. simpl.
+      unfold lookup_heap in t1destruct; simpl in t1destruct.
+      pose proof unsquash (wf_dec _ _) wf (S nxt) ltac:(lia) as H4.
+      rewrite H4 in t1destruct. simpl in t1destruct.  
+      destruct (nxt =? nxt) eqn:nxteq; [|rewrite Nat.eqb_neq in nxteq; try congruence].
+      assert ((HT_unfold_concrete {| H := H2; nxt := S nxt; wf := wf |} t2) = (HT_unfold_abstract nxt 
+        {|
+        H := <[S nxt:=(t2, abr)]> H2;
+        nxt := S (S nxt);
+        wf := insert_inc_next {| H := H2; nxt := S nxt; wf := wf |} t2 abr
+        |} t2)) as H5.
+      {
+        unfold HT_unfold_concrete. simpl. 
+        unfold lookup_heap. simpl. rewrite H4. simpl.       
+        Search HT_unfold_abstract.
+        eapply HT_unfold_abstract_domain.
+        intros.
+        destruct (PeanoNat.Nat.eq_dec n'0 (S nxt)); try lia.
+        unfold lookup_heap. simpl. rewrite lookup_insert_ne; try congruence.    
+      }
+      rewrite <- H5.
+      assert ((HT_unfold_abstract nxt
+        {|
+        H := <[S nxt:=(t2, abr)]> H2;
+        nxt := S (S nxt);
+        wf := insert_inc_next {| H := H2; nxt := S nxt; wf := wf |} t2 abr
+        |} (HTunfold t2 (S nxt) t1')) = (HT_unfold_abstract nxt {| H := H2; nxt := S nxt; wf := wf |} t1')) as H6.
+      {
+        assert ((HTunfold t2 (S nxt) t1') = t1') as auxeq.
+        {
+          eapply HT_unfold_abstract_domain_gen; try eassumption. lia.   
+        } 
+          rewrite auxeq.
+          eapply HT_unfold_abstract_domain;
+          intros.
+          unfold lookup_heap. simpl. rewrite lookup_insert_ne; try lia. reflexivity.    
+      }
+      rewrite H6 in *.
+      unfold HT_unfold_concrete.
+      symmetry. eapply hterm_to_term_subst_comm; try eassumption.  
+Admitted. 
+    (* idea is that on the left, one unfold gets you back to the abstract case t2 case for the caller, and t1' straight up does not change its unfolding. Can show this from the validity of the configuration.  *)

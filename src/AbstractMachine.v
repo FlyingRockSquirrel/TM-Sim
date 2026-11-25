@@ -1051,6 +1051,148 @@ Proof.
     rewrite H'. destruct (lookup_heap Hp' (S n)); eapply IHn; intros; eapply H; try lia.
 Qed.   
 
+Lemma hterm_to_term_some_clean : 
+  forall t t', 
+    hterm_to_term t = Some t' ->
+    (forall n, n ∉ addrs t).
+Proof. 
+  induction t; intros; simpl; unfold not; intros.
+  - set_solver.
+  - simpl in H0.   
+    destruct (hterm_to_term t1) eqn:t1eq; try discriminate.
+    destruct (hterm_to_term t2) eqn:t2eq; try discriminate.
+    specialize (IHt1 _ eq_refl n).
+    specialize (IHt2 _ eq_refl n).
+    set_solver.
+  - simpl in H0. destruct (hterm_to_term t) eqn:teq; try discriminate.
+    specialize (IHt _ eq_refl n0). set_solver.
+  - simpl in H0. discriminate.
+Qed. 
+
+(* Lemma heap_dag_entails_unfold_mono :  
+  forall n t Hp, 
+    heap_dag Hp ->
+    (forall n0, not (elem_of n0 (addrs (HT_unfold_abstract n Hp t)))) ->
+    forall n', elem_of n' (addrs t) -> n' <= n.
+Proof.
+  induction n. 
+  - induction t;  
+    intros Hp H0 H1 n' H2.
+    + simpl in H2; set_solver. 
+    + simpl in H2. eapply elem_of_union in H2.
+      destruct H2; [eapply IHt1|eapply IHt2]; try eassumption.
+      rewrite HT_unfold_abstract_app in H1.
+      admit. admit. 
+    + admit.
+    + simpl in *. destruct (lookup_heap Hp 0) eqn:lkup; simpl in *.
+      admit. admit.
+  - intros. simpl in H1. destruct (lookup_heap Hp (S n)) eqn:lkup.
+    + specialize (IHn (HTunfold h (S n) t) Hp H0 H1).
+      destruct (PeanoNat.Nat.eq_dec (S n) n'); try lia. 
+      Search HT_unfold_abstract. 
+
+
+
+  induction t; intros Hp' H n' H0 n0 H1.
+  - simpl in H1. set_solver.
+  - admit.
+  - admit.
+  - simpl in H1. assert (n0 = n) by set_solver; subst.
+    clear H1.
+    generalize dependent Hp'. 
+    generalize dependent n. induction n'.
+    + simpl; intros n Hp' H0 H1.
+      destruct (lookup_heap Hp' 0); [| simpl in H1; set_solver].
+      destruct n; simpl in H1; try lia.
+      specialize (H1 (S n)); set_solver.
+    + intros. simpl in *.
+      destruct (lookup_heap Hp' (S n')) eqn:lkup. 
+      * 
+      * specialize (IHn' n Hp' H0 H1). lia.   *)
+
+Lemma different_addr_unfold_untouched : 
+  forall t n n', 
+    elem_of n (addrs t) ->
+    not (n = n') ->
+    forall t', 
+      elem_of n (addrs (HTunfold t' n' t)).
+Proof.
+  induction t; intros n0 n1 H0 H1 t'.
+  - simpl in *; set_solver. 
+  - simpl in *. rewrite elem_of_union in H0.
+    eapply elem_of_union. 
+    destruct H0; [left; eapply IHt1; try congruence; assumption|right; eapply IHt2; try congruence; assumption].  
+  - simpl in *.  eapply IHt; try congruence; try eassumption. 
+  - simpl in *. assert (n0 = n) by set_solver; subst.
+    destruct (n1 =? n) eqn:eq; simpl; [|set_solver].
+    rewrite Nat.eqb_eq in eq; congruence. 
+Qed.  
+
+
+Lemma greater_addr_HT_unfold_abstract_untouched : 
+  forall n' t n, 
+    elem_of n (addrs t) ->
+    n' < n ->
+  forall Hp, 
+    elem_of n (addrs (HT_unfold_abstract n' Hp t)). 
+Proof.
+  induction n'; intros. 
+  - simpl in *. destruct (lookup_heap Hp 0) eqn:lkup; try assumption. 
+    eapply (different_addr_unfold_untouched t n 0 H0 ltac:(lia) h).
+  - simpl in *. destruct (lookup_heap Hp (S n')) eqn:lkup.
+    + eapply IHn'; try lia. 
+      eapply different_addr_unfold_untouched; try eassumption. lia.
+    + eapply IHn'; try lia; assumption. 
+Qed.       
+
+Lemma HT_unfold_abstract_domain_gen : 
+  forall t n Hp t', 
+    (* True  *)
+    (* heap_dag Hp -> *)
+    (* (forall n', n' <= n -> lookup_heap Hp n' = lookup_heap Hp' n') -> *)
+    hterm_to_term (HT_unfold_abstract n Hp t) = Some t' ->
+  forall n' t0,
+    n < n' -> 
+    HTunfold t0 (n') t = t.
+Proof.  
+  induction t; intros n0 Hp t' H0 n1 t0 ineq.
+  - simpl. reflexivity.
+  - simpl.
+    rewrite HT_unfold_abstract_app in H0.
+    simpl in H0. destruct (hterm_to_term (HT_unfold_abstract n0 Hp t1)) eqn:t1eq; try discriminate.
+    destruct (hterm_to_term (HT_unfold_abstract n0 Hp t2)) eqn:t2eq; try discriminate.
+    inversion H0; subst. 
+    rewrite (IHt1 n0 Hp t t1eq); try eassumption.
+    rewrite (IHt2 n0 Hp t3 t2eq); try eassumption.
+    reflexivity.
+  - simpl.
+    rewrite HT_unfold_abstract_abs in H0.
+    simpl in H0. destruct (hterm_to_term (HT_unfold_abstract n0 Hp t)) eqn:teq; try discriminate.
+    rewrite (IHt _ _ _ teq); try lia. reflexivity.
+  - destruct (Nat.lt_dec n n1).
+    {
+      simpl. destruct (n1 =? n) eqn:neq; try reflexivity.
+      rewrite Nat.eqb_eq in neq. lia.    
+    }
+    assert (n1 <= n) as neq by lia. clear n2.
+    assert ((HT_unfold_abstract n0 Hp (HAddr n)) = HAddr n) as aux.
+    {
+      clear t0.
+      revert H0 neq ineq.
+      generalize dependent n1. generalize dependent t'. generalize dependent Hp.
+      generalize dependent n. induction n0; intros n Hp t' n1 H ineq1 ineq2.
+      - simpl. destruct (lookup_heap Hp 0); simpl; try reflexivity.
+        destruct n eqn:neq; try lia. reflexivity.
+      - unfold HT_unfold_abstract in *. fold HT_unfold_abstract in *.
+        destruct (lookup_heap Hp (S n0)) eqn:lkup.
+        + unfold HTunfold in *. destruct (S n0 =? n) eqn:neq.
+          * rewrite Nat.eqb_eq in neq. lia.
+          * eapply IHn0; try eassumption. try lia.
+        + eapply IHn0; try eassumption. lia.  
+    }  
+    rewrite aux in *. simpl in H0; discriminate.  
+Qed.   
+
 Lemma HT_gc_abstract_out_of_domain : 
   forall n t Hp, 
     forall n', 
@@ -1263,10 +1405,33 @@ Proof.
     + eapply IHn. assumption.
 Qed. 
 
-Lemma  HT_unfold_concrete_subst_comm : 
+Lemma HT_unfold_concrete_subst_comm : 
     forall Hp t1 n' t2, 
     heap_closed Hp ->
     HT_unfold_concrete Hp (subst t1 n' t2) = subst (HT_unfold_concrete Hp t1) n' (HT_unfold_concrete Hp t2).
 Proof.
   intros. unfold HT_unfold_concrete in *. eapply HT_unfold_abstract_subst_comm. assumption.
 Qed.    
+
+Lemma hterm_to_term_entails_unfold_noop :
+  forall t t',
+    hterm_to_term t = Some t' ->
+    forall n t1, 
+      HTunfold t1 n t = t.
+Proof.   
+  induction t; intros t' H n' t0.
+  - simpl. reflexivity.
+  - simpl. simpl in H.    
+    destruct (hterm_to_term t1) eqn:t1eq; try discriminate.
+    destruct (hterm_to_term t2) eqn:t2eq; try discriminate.
+    inversion H; subst.
+    rewrite (IHt1 t eq_refl n' t0).
+    rewrite (IHt2 t3 eq_refl n' t0).
+    reflexivity.
+  - simpl in *. 
+    destruct (hterm_to_term t) eqn:teq; try discriminate.
+    inversion H; subst.
+    rewrite (IHt t1 eq_refl n' t0).
+    reflexivity.
+  - simpl in *. discriminate.
+Qed.   
