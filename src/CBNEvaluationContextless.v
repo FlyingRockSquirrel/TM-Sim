@@ -35,9 +35,6 @@ Fixpoint cbn_contextless_step t Hp v_size :=
   end. 
 
   Inductive cbn_reduce_rel (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
-(* | CBN_no_step : 
-  forall t Hp, 
-  cbn_reduce_rel v_size t Hp 0 t Hp *)
 | CBN_step_left : 
   forall t1 Hp t1' Hp' t2 , 
   cbn_reduce_rel v_size t1 Hp t1' Hp' ->
@@ -48,15 +45,39 @@ Fixpoint cbn_contextless_step t Hp v_size :=
     parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
     cbn_reduce_rel v_size (HApp (HAbs n' t1') t2) Hp' (subst t2 n' t1') Hp'
 | CBN_step_hb : 
-  forall Hp n' t1' t2 Hp', 
+  forall n' t1' t2 Hp', 
     (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
     ~ (parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp')) ->
-    cbn_reduce_rel v_size (HApp (HAbs n' t1') t2) Hp' (subst (HAddr (nxt Hp)) n' t1') (insert_heap Hp' t2 (Nat.log2_up (card_dom_heap Hp')))
+    cbn_reduce_rel v_size (HApp (HAbs n' t1') t2) Hp' (subst (HAddr (nxt Hp')) n' t1') (insert_heap Hp' t2 (Nat.log2_up (card_dom_heap Hp')))
 | CBN_step_ls : 
   forall n' Hp' t',
   (* cbn_reduce_rel v_size t Hp (HAddr n') Hp' -> *)
   lookup_heap Hp' n' = Some t' ->
   cbn_reduce_rel v_size (HAddr n') Hp' t' Hp'.
+
+Lemma cbn_reduce_rel_det : 
+  forall v_size t Hp t' Hp', 
+    cbn_reduce_rel v_size t Hp t' Hp' ->
+    forall t0 Hp0, 
+      cbn_reduce_rel v_size t Hp t0 Hp0 ->
+      t0 = t' /\ Hp0 = Hp'.
+Proof. 
+  intros v_size t Hp t' Hp' H; induction H; intros t0 Hp0 H0. 
+  - inversion H0; subst.
+    + destruct (IHcbn_reduce_rel t1'0 Hp0 H6) as (teq, heq).
+      subst. split; reflexivity.
+    + inversion H.
+    + inversion H.
+  - inversion H0; subst; try lia.
+    + inversion H6.
+    + split; reflexivity.
+  - inversion H0; subst; try lia.
+    + inversion H6.
+    + split; try reflexivity.
+  - inversion H0; subst.
+    split; try congruence. 
+Qed.             
+
 
 Inductive cbn_reduce_rel_ls (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
 | CBN_step_left_ls : 
@@ -69,6 +90,16 @@ Inductive cbn_reduce_rel_ls (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> P
   lookup_heap Hp' n' = Some t' ->
   cbn_reduce_rel_ls v_size (HAddr n') Hp' t' Hp'.
 
+Lemma cbn_reduce_rel_ls_correct : 
+  forall v_size t Hp t' Hp', 
+    cbn_reduce_rel_ls v_size t Hp t' Hp' ->
+    cbn_reduce_rel v_size t Hp t' Hp'.
+Proof.
+  intros v_size t Hp t' Hp' H; induction H.
+  - eapply CBN_step_left. eassumption.
+  - econstructor. eassumption.
+Qed.        
+
 Inductive cbn_reduce_rel_fb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
 | CBN_step_left_fb : 
   forall t1 Hp t1' Hp' t2 , 
@@ -80,6 +111,16 @@ Inductive cbn_reduce_rel_fb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> P
     parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
     cbn_reduce_rel_fb v_size (HApp (HAbs n' t1') t2) Hp' (subst t2 n' t1') Hp'.
 
+Lemma cbn_reduce_rel_fb_correct : 
+  forall v_size t Hp t' Hp', 
+    cbn_reduce_rel_fb v_size t Hp t' Hp' ->
+    cbn_reduce_rel v_size t Hp t' Hp'.
+Proof.
+  intros v_size t Hp t' Hp' H; induction H.
+  - eapply CBN_step_left. eassumption.
+  - econstructor. eassumption.
+Qed.     
+
 Inductive cbn_reduce_rel_sb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> Prop :=
 | CBN_step_left_sb : 
   forall t1 Hp t1' Hp' t2 , 
@@ -90,6 +131,16 @@ Inductive cbn_reduce_rel_sb (v_size : nat) : HTerm -> Heap -> HTerm -> Heap -> P
     (* cbn_reduce_rel v_size t1 Hp (HAbs n' t1') Hp' -> *)
     ~parameterized_size_hterm t2 v_size <= Nat.log2_up (card_dom_heap Hp') ->
     cbn_reduce_rel_sb v_size (HApp (HAbs n' t1') t2) Hp' (subst (HAddr (nxt Hp')) n' t1') (insert_heap Hp' t2 (Nat.log2_up (card_dom_heap Hp'))).
+
+Lemma cbn_reduce_rel_sb_correct : 
+  forall v_size t Hp t' Hp', 
+    cbn_reduce_rel_sb v_size t Hp t' Hp' ->
+    cbn_reduce_rel v_size t Hp t' Hp'.
+Proof.
+  intros v_size t Hp t' Hp' H; induction H.
+  - eapply CBN_step_left. eassumption.
+  - econstructor. eassumption.
+Qed.     
 
 Lemma cbn_reduce_rel_sb_insert : 
   forall v_size t1 Hp t1' Hp', 
@@ -543,7 +594,6 @@ Proof.
       {
         unfold HT_unfold_concrete. simpl. 
         unfold lookup_heap. simpl. rewrite H4. simpl.       
-        Search HT_unfold_abstract.
         eapply HT_unfold_abstract_domain.
         intros.
         destruct (PeanoNat.Nat.eq_dec n'0 (S nxt)); try lia.
